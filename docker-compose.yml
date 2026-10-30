@@ -1,21 +1,31 @@
+
 services:
 
+  # ==========================================
+  # MARIADB DATABASE
+  # ==========================================
   radius-mysql:
     image: mariadb:11.8
     container_name: radius-mysql
     restart: unless-stopped
+
     security_opt:
       - no-new-privileges:true
+
     cap_drop:
       - NET_RAW
+
     environment:
-      - MYSQL_DATABASE=radius
-      - MYSQL_USER=radius
-      - MYSQL_PASSWORD=${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in .env}
-      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD:?Set MYSQL_ROOT_PASSWORD in .env}
+      TZ: Asia/Jakarta
+      MYSQL_DATABASE: radius
+      MYSQL_USER: radius
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Set MYSQL_ROOT_PASSWORD}
+
     volumes:
-      - "./data/mysql:/var/lib/mysql"
-      - "./var/backup:/docker-entrypoint-initdb.d:ro"
+      - ./data/mysql:/var/lib/mysql
+      - ./var/backup:/docker-entrypoint-initdb.d:ro
+
     healthcheck:
       test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
       interval: 10s
@@ -23,97 +33,131 @@ services:
       retries: 10
       start_period: ${MYSQL_HEALTH_START_PERIOD:-10m}
 
+  # ==========================================
+  # FREERADIUS SERVER
+  # ==========================================
   radius:
     image: lirantal/dalofreeradius
-    container_name: radius
+
     build:
       context: .
       dockerfile: Dockerfile-freeradius
+
+    container_name: radius
     restart: unless-stopped
+
     security_opt:
       - no-new-privileges:true
+
     cap_drop:
       - NET_RAW
+
     depends_on:
       radius-mysql:
         condition: service_healthy
+
     ports:
-      - '1812:1812/udp'
-      - '1813:1813/udp'
+      - "1812:1812/udp"
+      - "1813:1813/udp"
+
     environment:
-      - TZ=${TZ:-Europe/Vienna}
-      - MYSQL_HOST=radius-mysql
-      - MYSQL_PORT=3306
-      - MYSQL_DATABASE=radius
-      - MYSQL_USER=radius
-      - MYSQL_PASSWORD=${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in .env}
-      - DEFAULT_CLIENT_SECRET=${DEFAULT_CLIENT_SECRET:?Set DEFAULT_CLIENT_SECRET in .env}
-      - FREERADIUS_SQL_TLS=${FREERADIUS_SQL_TLS:-disabled}
+      TZ: Asia/Jakarta
+      MYSQL_HOST: radius-mysql
+      MYSQL_PORT: 3306
+      MYSQL_DATABASE: radius
+      MYSQL_USER: radius
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD}
+      DEFAULT_CLIENT_SECRET: ${DEFAULT_CLIENT_SECRET:?Set DEFAULT_CLIENT_SECRET}
+      FREERADIUS_SQL_TLS: disabled
+
     volumes:
       - ./data/freeradius:/data
       - radius_logs:/var/log/freeradius
+
     healthcheck:
-      test: ["CMD-SHELL", "echo 'FreeRADIUS-Statistics-Type = 1' | radclient -q -r 1 -t 3 127.0.0.1:18121 status adminsecret >/dev/null"]
+      test:
+        - CMD-SHELL
+        - "echo 'FreeRADIUS-Statistics-Type = 1' | radclient -q -r 1 -t 3 127.0.0.1:18121 status adminsecret >/dev/null"
       interval: 10s
       timeout: 5s
       retries: 10
       start_period: 30s
-    # Uncomment below to enable debug logging.
-    #command: -X
 
+    # Untuk debug, aktifkan sementara:
+    # command: -X
+
+  # ==========================================
+  # DALORADIUS WEB DASHBOARD
+  # ==========================================
   radius-web:
     image: lirantal/daloradius
-    build: .
+
+    build:
+      context: .
+      dockerfile: Dockerfile
+
     container_name: radius-web
     restart: unless-stopped
+
     security_opt:
       - no-new-privileges:true
+
     cap_drop:
       - NET_RAW
+
     depends_on:
       radius-mysql:
         condition: service_healthy
       radius:
         condition: service_healthy
+
+    # Dashboard hanya localhost untuk sementara.
+    # Akses melalui SSH tunnel dari komputer administrator.
     ports:
-      - '80:80'
-      - '${DALORADIUS_OPERATORS_BIND:-127.0.0.1:8000}:8000'
+      - "127.0.0.1:8000:8000"
+
     environment:
-      - TZ=${TZ:-Europe/Vienna}
-      - MYSQL_HOST=radius-mysql
-      - MYSQL_PORT=3306
-      - MYSQL_DATABASE=radius
-      - MYSQL_USER=radius
-      - MYSQL_PASSWORD=${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in .env}
-      # Optional Settings:
-      - DEFAULT_CLIENT_SECRET=${DEFAULT_CLIENT_SECRET:?Set DEFAULT_CLIENT_SECRET in .env}
-      - DEFAULT_FREERADIUS_SERVER=radius
-      - MAIL_SMTPADDR=${MAIL_SMTPADDR:-127.0.0.1}
-      - MAIL_PORT=${MAIL_PORT:-25}
-      - MAIL_FROM=${MAIL_FROM:-root@daloradius.example.com}
-      - MAIL_AUTH=${MAIL_AUTH:-}
-      # LDAP URI and allowed groups are JSON arrays; do not split on commas.
-      - DALORADIUS_OPERATOR_AUTH_LOCAL_ENABLED=${DALORADIUS_OPERATOR_AUTH_LOCAL_ENABLED:-true}
-      - DALORADIUS_OPERATOR_AUTH_LDAP_ENABLED=${DALORADIUS_OPERATOR_AUTH_LDAP_ENABLED:-false}
-      - DALORADIUS_OPERATOR_AUTH_DEFAULT=${DALORADIUS_OPERATOR_AUTH_DEFAULT:-local}
-      - DALORADIUS_LDAP_URI=${DALORADIUS_LDAP_URI:-[]}
-      - DALORADIUS_LDAP_SECURITY=${DALORADIUS_LDAP_SECURITY:-starttls}
-      - DALORADIUS_LDAP_TLS_VERIFY=${DALORADIUS_LDAP_TLS_VERIFY:-true}
-      - DALORADIUS_LDAP_TLS_CA_FILE=${DALORADIUS_LDAP_TLS_CA_FILE:-}
-      - DALORADIUS_LDAP_BASE_DN=${DALORADIUS_LDAP_BASE_DN:-}
-      - DALORADIUS_LDAP_USER_BASE_DN=${DALORADIUS_LDAP_USER_BASE_DN:-}
-      - DALORADIUS_LDAP_BIND_DN=${DALORADIUS_LDAP_BIND_DN:-}
-      - DALORADIUS_LDAP_BIND_PASSWORD=${DALORADIUS_LDAP_BIND_PASSWORD:-}
-      - DALORADIUS_LDAP_FILTER=${DALORADIUS_LDAP_FILTER:-}
-      - DALORADIUS_LDAP_EXTERNAL_ID_ATTRIBUTE=${DALORADIUS_LDAP_EXTERNAL_ID_ATTRIBUTE:-}
-      - DALORADIUS_LDAP_TIMEOUT=${DALORADIUS_LDAP_TIMEOUT:-5}
-      - DALORADIUS_LDAP_ALLOWED_GROUPS=${DALORADIUS_LDAP_ALLOWED_GROUPS:-[]}
-      - DALORADIUS_LDAP_GROUP_ATTRIBUTE=${DALORADIUS_LDAP_GROUP_ATTRIBUTE:-memberOf}
-      - DALORADIUS_LDAP_GROUP_MATCHING_RULE=${DALORADIUS_LDAP_GROUP_MATCHING_RULE:-}
+      TZ: Asia/Jakarta
+      MYSQL_HOST: radius-mysql
+      MYSQL_PORT: 3306
+      MYSQL_DATABASE: radius
+      MYSQL_USER: radius
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD}
+
+      DEFAULT_CLIENT_SECRET: ${DEFAULT_CLIENT_SECRET:?Set DEFAULT_CLIENT_SECRET}
+      DEFAULT_FREERADIUS_SERVER: radius
+
+      MAIL_SMTPADDR: ${MAIL_SMTPADDR:-127.0.0.1}
+      MAIL_PORT: ${MAIL_PORT:-25}
+      MAIL_FROM: ${MAIL_FROM:-root@bhamada.ac.id}
+      MAIL_AUTH: ${MAIL_AUTH:-}
+
+      DALORADIUS_OPERATOR_AUTH_LOCAL_ENABLED: ${DALORADIUS_OPERATOR_AUTH_LOCAL_ENABLED:-true}
+      DALORADIUS_OPERATOR_AUTH_LDAP_ENABLED: ${DALORADIUS_OPERATOR_AUTH_LDAP_ENABLED:-false}
+      DALORADIUS_OPERATOR_AUTH_DEFAULT: ${DALORADIUS_OPERATOR_AUTH_DEFAULT:-local}
+
+      DALORADIUS_LDAP_URI: ${DALORADIUS_LDAP_URI:-[]}
+      DALORADIUS_LDAP_SECURITY: ${DALORADIUS_LDAP_SECURITY:-starttls}
+      DALORADIUS_LDAP_TLS_VERIFY: ${DALORADIUS_LDAP_TLS_VERIFY:-true}
+      DALORADIUS_LDAP_TLS_CA_FILE: ${DALORADIUS_LDAP_TLS_CA_FILE:-}
+      DALORADIUS_LDAP_BASE_DN: ${DALORADIUS_LDAP_BASE_DN:-}
+      DALORADIUS_LDAP_USER_BASE_DN: ${DALORADIUS_LDAP_USER_BASE_DN:-}
+      DALORADIUS_LDAP_BIND_DN: ${DALORADIUS_LDAP_BIND_DN:-}
+      DALORADIUS_LDAP_BIND_PASSWORD: ${DALORADIUS_LDAP_BIND_PASSWORD:-}
+      DALORADIUS_LDAP_FILTER: ${DALORADIUS_LDAP_FILTER:-}
+      DALORADIUS_LDAP_EXTERNAL_ID_ATTRIBUTE: ${DALORADIUS_LDAP_EXTERNAL_ID_ATTRIBUTE:-}
+      DALORADIUS_LDAP_TIMEOUT: ${DALORADIUS_LDAP_TIMEOUT:-5}
+      DALORADIUS_LDAP_ALLOWED_GROUPS: ${DALORADIUS_LDAP_ALLOWED_GROUPS:-[]}
+      DALORADIUS_LDAP_GROUP_ATTRIBUTE: ${DALORADIUS_LDAP_GROUP_ATTRIBUTE:-memberOf}
+      DALORADIUS_LDAP_GROUP_MATCHING_RULE: ${DALORADIUS_LDAP_GROUP_MATCHING_RULE:-}
 
     volumes:
       - ./data/daloradius:/data
       - radius_logs:/var/log/freeradius
 
+# ==========================================
+# PERSISTENT VOLUME
+# ==========================================
 volumes:
   radius_logs:
+    name: radius_bhamada_logs
